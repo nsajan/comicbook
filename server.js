@@ -727,7 +727,7 @@ async function generateImage(prompt, aspectRatio = '1:1', referenceImageUrl = nu
 
   const response = await withRetry(() =>
     genai.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-2.5-flash-image',
       contents: [{ role: 'user', parts: contents }],
       config: {
         responseModalities: ['TEXT', 'IMAGE'],
