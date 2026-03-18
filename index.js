@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import Replicate from 'replicate';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,12 +16,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Setup ──────────────────────────────────────────────────────────────────────
 
-if (!process.env.REPLICATE_API_TOKEN) {
-  console.error('Missing REPLICATE_API_TOKEN in .env');
+if (!process.env.GEMINI_API_KEY) {
+  console.error('Missing GEMINI_API_KEY in .env');
   process.exit(1);
 }
-
-const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
 async function getUserInput() {
   const arg = process.argv.slice(2).join(' ').trim();
@@ -41,7 +38,7 @@ async function getUserInput() {
 
 async function main() {
   console.log('\n╔══════════════════════════════════════╗');
-  console.log('║     COMIC BOOK AI AGENT  v2          ║');
+  console.log('║     COMIC BOOK AI AGENT  v3          ║');
   console.log('╚══════════════════════════════════════╝\n');
 
   const userIdea = await getUserInput();
@@ -53,21 +50,21 @@ async function main() {
 
   // ── Step 1: Characters + premise ────────────────────────────────────────────
   log('1', 'Designing characters and locking story premise');
-  const { premise, characters } = await generateCharacters(replicate, userIdea);
+  const { premise, characters } = await generateCharacters(null, userIdea);
   console.log(`\n  Premise: ${premise}`);
 
   // ── Step 2: Character Reference Sheet ──────────────────────────────────────
-  log('2', 'Generating character reference sheet (nano-banana)');
-  const { url: refImageUrl, localPath: refSheetPath } = await generateCharacterSheet(replicate, characters);
-  console.log(`  Reference image URL: ${refImageUrl}`);
+  log('2', 'Generating character reference sheet (Google Imagen)');
+  const { url: refImageUrl, localPath: refSheetPath } = await generateCharacterSheet(null, characters);
+  console.log(`  Reference sheet generated`);
 
   // ── Step 3: Story ───────────────────────────────────────────────────────────
   log('3', 'Writing the story from premise');
-  const story = await generateStory(replicate, premise, characters);
+  const story = await generateStory(null, premise, characters);
 
   // ── Step 4: Panel Images ────────────────────────────────────────────────────
-  log('4', 'Generating 7 panels with nano-banana (using character reference)');
-  const panels = await generatePanels(replicate, story, characters, refImageUrl);
+  log('4', 'Generating 7 panels with Google GenAI (using character reference)');
+  const panels = await generatePanels(null, story, characters, refImageUrl);
 
   // ── Step 5: Render HTML ─────────────────────────────────────────────────────
   log('5', 'Rendering comic book HTML');

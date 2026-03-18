@@ -1,12 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
-import Replicate from 'replicate';
+import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { generateCharacters } from './pipeline/characters.js';
 import { generateStory } from './pipeline/story.js';
-import { withRetry, toReplicateUrl, sleep } from './utils.js';
+import { withRetry, sleep } from './utils.js';
 import { STYLES, getStyle } from './styles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,9 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 // shape: { idea, style, characters, refImageUrl, story, panels, status }
 const sessions = new Map();
 
-function newReplicate() {
-  return new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-}
+const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ── Shared HTML shell ─────────────────────────────────────────────────────────
 function shell(title, body, extraHead = '') {
@@ -421,7 +419,7 @@ app.get('/cast/:id', (req, res) => {
           <span class="prog-icon">🎨</span>
           <div class="prog-text">
             <div class="prog-label">Drawing Reference Sheet</div>
-            <div class="prog-sub" id="p2s">nano-banana renders your full cast</div>
+            <div class="prog-sub" id="p2s">Google Imagen renders your full cast</div>
           </div>
           <div class="prog-status" id="p2i"></div>
         </div>
@@ -472,18 +470,16 @@ app.get('/cast-stream/:id', async (req, res) => {
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const replicate = newReplicate();
-
     // Step 1: Characters + premise (one call, shared narrative anchor)
     sse('step', { step: 1 });
-    const { premise, characters } = await generateCharacters(replicate, session.idea, session.style);
+    const { premise, characters } = await generateCharacters(null, session.idea, session.style);
     session.premise = premise;
     session.characters = characters;
     sse('stepdone', { step: 1, note: `${characters.length} characters · premise locked` });
 
     // Step 2: Reference sheet
     sse('step', { step: 2 });
-    const refImageUrl = await buildRefSheet(replicate, characters, session.style);
+    const refImageUrl = await buildRefSheet(characters, session.style);
     session.refImageUrl = refImageUrl;
     session.status = 'cast_ready';
     sse('stepdone', { step: 2, note: 'Reference sheet drawn' });
@@ -627,7 +623,7 @@ app.get('/making/:id', (req, res) => {
       es.addEventListener('panel_start',  e  => {
         const n = JSON.parse(e.data).panel;
         activate(document.getElementById('pp'+n));
-        setNote(document.getElementById('pp'+n), 'nano-banana drawing with char reference…');
+        setNote(document.getElementById('pp'+n), 'Google GenAI drawing with char reference…');
       });
       es.addEventListener('panel_done',   e  => {
         const { panel, imgUrl } = JSON.parse(e.data);
@@ -664,12 +660,11 @@ app.get('/make-stream/:id', async (req, res) => {
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const replicate = newReplicate();
     const { characters, refImageUrl, premise } = session;
 
     // Story — uses the SAME premise that was used to design the characters
     sse('story_start', {});
-    const story = await generateStory(replicate, premise, characters);
+    const story = await generateStory(null, premise, characters);
     session.story = story;
     sse('story_done', { title: story.title });
 
@@ -677,7 +672,7 @@ app.get('/make-stream/:id', async (req, res) => {
     story.story.forEach((scene) => sse('panel_start', { panel: scene.panel }));
     const panelResults = await Promise.all(
       story.story.map(async (scene) => {
-        const imgUrl = await buildPanel(replicate, scene, story, characters, refImageUrl, session.style);
+        const imgUrl = await buildPanel(scene, story, characters, refImageUrl, session.style);
         sse('panel_done', { panel: scene.panel, imgUrl });
         return { ...scene, localPath: imgUrl };
       })
@@ -716,7 +711,58 @@ app.get('/comic/:id', (req, res) => {
 // Pipeline helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function buildRefSheet(replicate, characters, style) {
+async function generateImage(prompt, aspectRatio = '1:1', referenceImageUrl = null) {
+  const contents = [];
+
+  // If we have a reference image, fetch it and include as inline data
+  if (referenceImageUrl) {
+    const imgRes = await fetch(referenceImageUrl);
+    const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+    contents.push({
+      inlineData: { mimeType: 'image/jpeg', data: imgBuf.toString('base64') },
+    });
+  }
+
+  contents.push({ text: prompt });
+
+  const response = await withRetry(() =>
+    genai.models.generateContent({
+      model: 'gemini-2.0-flash-exp',
+      contents: [{ role: 'user', parts: contents }],
+      config: {
+        responseModalities: ['TEXT', 'IMAGE'],
+        responseMimeType: 'text/plain',
+      },
+    })
+  , 'image gen');
+
+  // Extract image from response parts
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      const b64 = part.inlineData.data;
+      const mime = part.inlineData.mimeType || 'image/png';
+      return `data:${mime};base64,${b64}`;
+    }
+  }
+
+  // Fallback: try Imagen 3 directly
+  const imagenResponse = await withRetry(() =>
+    genai.models.generateImages({
+      model: 'imagen-3.0-generate-001',
+      prompt,
+      config: { numberOfImages: 1 },
+    })
+  , 'imagen fallback');
+
+  if (imagenResponse.generatedImages?.[0]?.image?.imageBytes) {
+    const b64 = imagenResponse.generatedImages[0].image.imageBytes;
+    return `data:image/png;base64,${b64}`;
+  }
+
+  throw new Error('No image generated');
+}
+
+async function buildRefSheet(characters, style) {
   const charList = characters.map((c) => `${c.name}: ${c.description}`).join('\n');
   const imageStyle = style?.imageStyle ?? 'Cinematic 3D animation, Pixar aesthetic, vibrant saturated colors, thick bold black ink outlines, cel-shaded, high detail';
   const prompt =
@@ -724,16 +770,10 @@ async function buildRefSheet(replicate, characters, style) {
     `Full body, white background, no overlap.\n${charList}\n` +
     `${imageStyle}.`;
 
-  const output = await withRetry(() =>
-    replicate.run('google/nano-banana', {
-      input: { prompt, aspect_ratio: '16:9', output_format: 'jpg' },
-    })
-  , 'refsheet');
-
-  return typeof output === 'string' ? output : String(output);
+  return generateImage(prompt, '16:9');
 }
 
-async function buildPanel(replicate, scene, story, characters, refImageUrl, style) {
+async function buildPanel(scene, story, characters, refImageUrl, style) {
   const imageStyle = style?.imageStyle ?? 'Cinematic 3D comic book art style, Pixar-meets-graphic-novel aesthetic, thick bold ink outlines, cel-shaded characters';
   const charBlock = characters.map((c) => `${c.name} is ${c.description}.`).join('\n');
   const bubbleBlock = (scene.speech_bubbles || []).map((b, i) => {
@@ -756,13 +796,7 @@ async function buildPanel(replicate, scene, story, characters, refImageUrl, styl
     `${imageStyle}, ${scene.lighting || story.mood}, clean white speech bubbles with bold black rounded borders, bold readable uppercase comic font inside all bubbles.`,
   ].filter(Boolean).join('\n');
 
-  const output = await withRetry(() =>
-    replicate.run('google/nano-banana', {
-      input: { prompt, image_input: [refImageUrl], aspect_ratio: '4:3', output_format: 'jpg' },
-    })
-  , `panel ${scene.panel}`);
-
-  return typeof output === 'string' ? output : String(output);
+  return generateImage(prompt, '4:3', refImageUrl);
 }
 
 function buildComicHTML(story, characters, refImageUrl, panels) {

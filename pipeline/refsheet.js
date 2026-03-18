@@ -1,16 +1,19 @@
+import { GoogleGenAI } from '@google/genai';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { withRetry, downloadImage, logProgress, logDone } from '../utils.js';
+import { withRetry, logProgress, logDone } from '../utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 /**
- * Step 2 — Generate a character reference sheet image using nano-banana.
+ * Step 2 — Generate a character reference sheet image using Google Imagen.
  * All characters in one image, labeled, clean background.
  * Returns: { url, localPath }
  */
-export async function generateCharacterSheet(replicate, characters, style) {
-  logProgress('Generating character reference sheet with nano-banana...');
+export async function generateCharacterSheet(_unused, characters, style) {
+  logProgress('Generating character reference sheet with Google Imagen...');
 
   const charList = characters
     .map((c) => `${c.name}: ${c.description}`)
@@ -24,21 +27,25 @@ export async function generateCharacterSheet(replicate, characters, style) {
     `Full body, white background, no overlapping. Characters:\n${charList}\n` +
     `${imageStyle}, clean character designs, reference sheet layout.`;
 
-  const output = await withRetry(() =>
-    replicate.run('google/nano-banana', {
-      input: {
-        prompt,
-        aspect_ratio: '16:9',
-        output_format: 'jpg',
-      },
+  const response = await withRetry(() =>
+    genai.models.generateImages({
+      model: 'imagen-3.0-generate-001',
+      prompt,
+      config: { numberOfImages: 1 },
     })
   , 'character sheet');
 
-  const url = typeof output === 'string' ? output : String(output);
+  const imgData = response.generatedImages?.[0]?.image?.imageBytes;
+  if (!imgData) throw new Error('No image generated for character sheet');
 
-  const localPath = path.join(__dirname, '..', 'panels', 'character-sheet.jpg');
-  await downloadImage(url, localPath);
+  // Save locally
+  const panelsDir = path.join(__dirname, '..', 'panels');
+  if (!fs.existsSync(panelsDir)) fs.mkdirSync(panelsDir, { recursive: true });
+  const localPath = path.join(panelsDir, 'character-sheet.png');
+  fs.writeFileSync(localPath, Buffer.from(imgData, 'base64'));
+
+  const dataUrl = `data:image/png;base64,${imgData}`;
 
   logDone();
-  return { url, localPath: 'panels/character-sheet.jpg' };
+  return { url: dataUrl, localPath: 'panels/character-sheet.png' };
 }
