@@ -112,7 +112,7 @@ async function generatePanelImage(scene, characters, refImageUrl, imageStyle, mo
   // Fallback: Imagen without reference
   const imagenResponse = await withRetry(() =>
     genai.models.generateImages({
-      model: 'imagen-3.0-generate-001',
+      model: 'imagen-4.0-generate-001',
       prompt,
       config: { numberOfImages: 1 },
     })

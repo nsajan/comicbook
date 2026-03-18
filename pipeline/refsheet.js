@@ -29,7 +29,7 @@ export async function generateCharacterSheet(_unused, characters, style) {
 
   const response = await withRetry(() =>
     genai.models.generateImages({
-      model: 'imagen-3.0-generate-001',
+      model: 'imagen-4.0-generate-001',
       prompt,
       config: { numberOfImages: 1 },
     })
