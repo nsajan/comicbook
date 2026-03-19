@@ -1,5 +1,5 @@
 /**
- * Step 5 — Render the final HTML comic book.
+ * Step 5 — Render the final HTML comic book (CLI mode).
  */
 export function generateHTML(story, characters, refSheetPath, panels) {
   const charRoster = characters
@@ -40,85 +40,131 @@ export function generateHTML(story, characters, refSheetPath, panels) {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${story.title}</title>
+  <title>${story.title} — Cute Comic Factory</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    :root {
-      --ink: #0d0d0d;
-      --gold: #ffd700;
-      --red: #e63946;
-      --cream: #fffdf0;
-      --bg: #12121e;
+    :root, [data-theme="light"] {
+      --purple: #7c3aed;
+      --purple-light: #a78bfa;
+      --pink: #ec4899;
+      --mint: #34d399;
+      --yellow: #fbbf24;
+      --orange: #fb923c;
+      --bg: #faf7ff;
+      --card: #ffffff;
+      --card-alt: #f5f3ff;
+      --text: #1e1b4b;
+      --text-soft: #6b7280;
+      --text-desc: #555;
+      --border: #e5e7eb;
+      --bubble-bg: #f5f3ff;
+      --bubble-thought-bg: #fdf2f8;
+      --bubble-shout-bg: #fef3c7;
+      --radius: 16px;
+      --radius-lg: 24px;
+      --shadow: 0 4px 24px rgba(124,58,237,.08);
+      --shadow-lg: 0 8px 40px rgba(124,58,237,.12);
+    }
+    [data-theme="dark"] {
+      --bg: #0f0d1a; --card: #1a1726; --card-alt: #231f33;
+      --text: #e8e4f0; --text-soft: #9690a8; --text-desc: #b0aac0;
+      --border: #2d2840;
+      --bubble-bg: #231f33; --bubble-thought-bg: #2a1f2e; --bubble-shout-bg: #2a2518;
+      --shadow: 0 4px 24px rgba(0,0,0,.3);
+      --shadow-lg: 0 8px 40px rgba(0,0,0,.4);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f0d1a; --card: #1a1726; --card-alt: #231f33;
+        --text: #e8e4f0; --text-soft: #9690a8; --text-desc: #b0aac0;
+        --border: #2d2840;
+        --bubble-bg: #231f33; --bubble-thought-bg: #2a1f2e; --bubble-shout-bg: #2a2518;
+        --shadow: 0 4px 24px rgba(0,0,0,.3);
+        --shadow-lg: 0 8px 40px rgba(0,0,0,.4);
+      }
     }
 
     body {
       background: var(--bg);
-      font-family: 'Comic Neue', cursive;
-      color: var(--ink);
+      font-family: 'Nunito', sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      transition: background .3s, color .3s;
     }
+    .theme-toggle-float {
+      position: fixed; top: 16px; right: 16px; z-index: 100;
+      background: var(--card); border: 2px solid var(--border);
+      border-radius: 50px; padding: 8px 14px; cursor: pointer;
+      font-size: 1.1rem; line-height: 1; box-shadow: var(--shadow);
+      transition: background .2s, border-color .2s;
+    }
+    .theme-toggle-float:hover { border-color: var(--purple-light); }
 
     /* ── Hero ── */
     .hero {
       position: relative;
-      background: linear-gradient(135deg, #0d0d2b 0%, #1a0a2e 50%, #0d1a2b 100%);
+      background: linear-gradient(135deg, #7c3aed 0%, #ec4899 50%, #fb923c 100%);
       padding: 80px 24px 60px;
       text-align: center;
-      border-bottom: 6px solid var(--ink);
       overflow: hidden;
     }
     .hero::before {
       content: '';
       position: absolute; inset: 0;
-      background: radial-gradient(ellipse at 50% 0%, rgba(255,215,0,.15) 0%, transparent 70%);
+      background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.2) 0%, transparent 70%);
       pointer-events: none;
     }
     .hero-genre {
-      font-family: 'Bangers', cursive;
-      font-size: 1rem;
-      letter-spacing: 6px;
-      color: var(--red);
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: .9rem;
+      letter-spacing: 4px;
+      color: rgba(255,255,255,.85);
       margin-bottom: 16px;
       text-transform: uppercase;
     }
     .hero-title {
-      font-family: 'Bangers', cursive;
-      font-size: clamp(3.5rem, 10vw, 8rem);
-      color: var(--gold);
-      text-shadow: 5px 5px 0 var(--ink), -2px -2px 0 var(--ink), 8px 0 0 var(--red);
-      letter-spacing: 4px;
-      line-height: 1;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: clamp(3rem, 9vw, 6rem);
+      color: #fff;
+      text-shadow: 0 4px 24px rgba(0,0,0,.15);
+      line-height: 1.1;
     }
     .hero-tagline {
-      font-family: 'Bangers', cursive;
-      font-size: clamp(1.1rem, 3vw, 1.6rem);
-      color: #fff;
-      letter-spacing: 3px;
+      font-family: 'Nunito', sans-serif;
+      font-weight: 600;
+      font-size: clamp(1rem, 2.5vw, 1.4rem);
+      color: rgba(255,255,255,.9);
       margin-top: 18px;
-      opacity: .85;
     }
 
     /* ── Character Roster ── */
     .roster-section {
-      background: var(--cream);
-      border-bottom: 5px solid var(--ink);
-      padding: 40px 24px;
+      background: var(--card);
+      padding: 50px 24px;
     }
     .section-title {
-      font-family: 'Bangers', cursive;
-      font-size: 2.2rem;
-      letter-spacing: 4px;
-      color: var(--ink);
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: 2rem;
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
       text-align: center;
-      margin-bottom: 24px;
+      margin-bottom: 28px;
     }
     .ref-sheet-wrap {
       max-width: 900px;
       margin: 0 auto 32px;
-      border: 4px solid var(--ink);
-      box-shadow: 8px 8px 0 var(--ink);
+      border: 2px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
     }
     .ref-sheet-wrap img {
       width: 100%;
@@ -126,36 +172,38 @@ export function generateHTML(story, characters, refSheetPath, panels) {
     }
     .char-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 16px;
       max-width: 1100px;
       margin: 0 auto;
     }
     .char-card {
-      background: #fff;
-      border: 3px solid var(--ink);
-      box-shadow: 4px 4px 0 var(--ink);
-      padding: 14px 16px;
-      border-radius: 2px;
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      transition: transform .2s, box-shadow .2s;
     }
+    .char-card:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
     .char-role {
       font-size: .7rem;
       text-transform: uppercase;
       letter-spacing: 2px;
-      color: var(--red);
+      color: var(--pink);
       font-weight: 700;
       margin-bottom: 4px;
     }
     .char-name {
-      font-family: 'Bangers', cursive;
-      font-size: 1.5rem;
-      letter-spacing: 1px;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: 1.3rem;
+      color: var(--purple);
       margin-bottom: 6px;
     }
     .char-desc {
-      font-size: .78rem;
+      font-size: .82rem;
       line-height: 1.5;
-      color: #444;
+      color: var(--text-desc);
     }
 
     /* ── Comic Grid ── */
@@ -165,88 +213,81 @@ export function generateHTML(story, characters, refSheetPath, panels) {
     .comic-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 28px;
-      max-width: 1300px;
+      gap: 24px;
+      max-width: 1200px;
       margin: 0 auto;
     }
-    /* Wide panel for panel 4 (midpoint climax) */
     .panel--wide {
       grid-column: 1 / -1;
     }
 
     .panel {
-      background: #fff;
-      border: 4px solid var(--ink);
-      box-shadow: 8px 8px 0 var(--ink);
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
       overflow: hidden;
-      transition: transform .15s, box-shadow .15s;
+      box-shadow: var(--shadow);
+      transition: transform .2s, box-shadow .2s;
     }
     .panel:hover {
-      transform: translate(-4px, -4px);
-      box-shadow: 12px 12px 0 var(--ink);
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
     }
     .panel-header {
-      background: var(--red);
-      padding: 4px 12px;
-      border-bottom: 3px solid var(--ink);
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      padding: 6px 16px;
     }
     .panel-num {
-      font-family: 'Bangers', cursive;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
       font-size: .85rem;
-      letter-spacing: 3px;
+      letter-spacing: 2px;
       color: #fff;
     }
     .panel-image-wrap img {
       width: 100%;
       display: block;
-      border-bottom: 3px solid var(--ink);
     }
     .panel-body {
-      padding: 14px 16px;
-      background: var(--cream);
+      padding: 14px 18px;
     }
 
     /* Speech bubbles */
     .bubble {
       display: inline-block;
-      background: #fff;
-      border: 3px solid var(--ink);
-      border-radius: 18px;
-      padding: 7px 14px;
-      font-family: 'Comic Neue', cursive;
+      background: var(--bubble-bg);
+      border: 2px solid var(--purple-light);
+      border-radius: 20px;
+      padding: 8px 14px;
+      font-family: 'Nunito', sans-serif;
       font-weight: 700;
-      font-size: .9rem;
-      margin-bottom: 8px;
+      font-size: .85rem;
+      margin-bottom: 6px;
       max-width: 100%;
-      position: relative;
-    }
-    .bubble::after {
-      content: '';
-      position: absolute;
-      bottom: -13px; left: 22px;
-      border: 7px solid transparent;
-      border-top-color: var(--ink);
+      color: var(--text);
     }
     .bubble--thought {
       border-radius: 50px;
       font-style: italic;
+      background: var(--bubble-thought-bg);
+      border-color: var(--pink);
     }
     .bubble--shout {
-      background: #fff7a0;
-      border-color: #e6a400;
-      font-size: 1rem;
+      background: var(--bubble-shout-bg);
+      border-color: var(--yellow);
+      font-size: .95rem;
     }
     .bubble--whisper {
-      opacity: .8;
+      opacity: .75;
       font-size: .82rem;
       border-style: dashed;
     }
 
     .caption {
       font-style: italic;
-      font-size: .88rem;
-      color: #333;
-      line-height: 1.5;
+      font-size: .85rem;
+      color: var(--text-soft);
+      line-height: 1.6;
       margin-top: 6px;
     }
 
@@ -254,12 +295,11 @@ export function generateHTML(story, characters, refSheetPath, panels) {
     footer {
       text-align: center;
       padding: 32px;
-      font-family: 'Bangers', cursive;
-      font-size: 1.1rem;
-      color: var(--gold);
-      letter-spacing: 4px;
-      opacity: .7;
-      border-top: 4px solid #2a2a3e;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--purple-light);
+      border-top: 1px solid var(--border);
     }
 
     @media (max-width: 640px) {
@@ -277,7 +317,7 @@ export function generateHTML(story, characters, refSheetPath, panels) {
   </header>
 
   <section class="roster-section">
-    <h2 class="section-title">CAST OF CHARACTERS</h2>
+    <h2 class="section-title">Cast of Characters</h2>
     <div class="ref-sheet-wrap">
       <img src="${refSheetPath}" alt="Character Reference Sheet" />
     </div>
@@ -287,14 +327,35 @@ export function generateHTML(story, characters, refSheetPath, panels) {
   </section>
 
   <section class="comic-section">
-    <h2 class="section-title" style="color:var(--gold); margin-bottom:32px;">THE STORY</h2>
+    <h2 class="section-title" style="margin-bottom:32px;">The Story</h2>
     <div class="comic-grid">
       ${panelCards}
     </div>
   </section>
 
-  <footer>THE END &mdash; Generated by Comic Book AI Agent</footer>
+  <footer>The End &mdash; Made with Cute Comic Factory</footer>
 
+  <button class="theme-toggle-float" onclick="toggleTheme()" aria-label="Toggle theme" id="themeBtn"></button>
+  <script>
+    (function(){
+      var stored = localStorage.getItem('theme');
+      if (stored) document.documentElement.setAttribute('data-theme', stored);
+      updateIcon();
+    })();
+    function toggleTheme() {
+      var current = document.documentElement.getAttribute('data-theme');
+      var isDark = current === 'dark' || (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      var next = isDark ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      updateIcon();
+    }
+    function updateIcon() {
+      var current = document.documentElement.getAttribute('data-theme');
+      var isDark = current === 'dark' || (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.getElementById('themeBtn').textContent = isDark ? '\\u2600\\uFE0F' : '\\uD83C\\uDF19';
+    }
+  </script>
 </body>
 </html>`;
 }

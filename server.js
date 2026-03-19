@@ -14,14 +14,27 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Persistent storage ────────────────────────────────────────────────────────
-// Railway: mount a volume at /data. Locally falls back to ./data/
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'comics')
   : path.join(__dirname, 'data', 'comics');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 function comicPath(id) { return path.join(DATA_DIR, `${id}.html`); }
-function saveComic(id, html) { fs.writeFileSync(comicPath(id), html, 'utf8'); }
+const INDEX_PATH = path.join(DATA_DIR, 'index.json');
+
+function loadIndex() {
+  try { return JSON.parse(fs.readFileSync(INDEX_PATH, 'utf8')); } catch { return []; }
+}
+function saveIndex(index) { fs.writeFileSync(INDEX_PATH, JSON.stringify(index), 'utf8'); }
+
+function saveComic(id, html, meta = {}) {
+  fs.writeFileSync(comicPath(id), html, 'utf8');
+  const index = loadIndex();
+  index.unshift({ id, title: meta.title || '', genre: meta.genre || '', style: meta.style || '', createdAt: Date.now() });
+  // Keep only last 10
+  while (index.length > 10) index.pop();
+  saveIndex(index);
+}
 function loadComic(id) {
   try { return fs.readFileSync(comicPath(id), 'utf8'); } catch { return null; }
 }
@@ -29,10 +42,7 @@ function loadComic(id) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ── In-memory session store ───────────────────────────────────────────────────
-// shape: { idea, style, characters, refImageUrl, story, panels, status }
 const sessions = new Map();
-
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ── Shared HTML shell ─────────────────────────────────────────────────────────
@@ -42,242 +52,380 @@ function shell(title, body, extraHead = '') {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>${title} — Comic Book AI</title>
-  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet"/>
+  <title>${title} — Cute Comic Factory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet"/>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --ink: #0d0d0d;
-      --gold: #ffd700;
-      --red: #e63946;
-      --cream: #fffdf0;
-      --bg: #12121e;
-      --card: #1e1e30;
+    :root, [data-theme="light"] {
+      --purple: #7c3aed;
+      --purple-light: #a78bfa;
+      --pink: #ec4899;
+      --mint: #34d399;
+      --yellow: #fbbf24;
+      --orange: #fb923c;
+      --bg: #faf7ff;
+      --card: #ffffff;
+      --card-alt: #f5f3ff;
+      --text: #1e1b4b;
+      --text-soft: #6b7280;
+      --text-desc: #555;
+      --border: #e5e7eb;
+      --nav-bg: rgba(255,255,255,.92);
+      --step-bg: #fff;
+      --step-num-bg: #f3f0ff;
+      --step-num-color: #c4b5d4;
+      --input-bg: #fff;
+      --chip-bg: #fff;
+      --bubble-bg: #f5f3ff;
+      --bubble-thought-bg: #fdf2f8;
+      --bubble-shout-bg: #fef3c7;
+      --radius: 16px;
+      --radius-lg: 24px;
+      --shadow: 0 4px 24px rgba(124,58,237,.08);
+      --shadow-lg: 0 8px 40px rgba(124,58,237,.12);
     }
-    body { background: var(--bg); font-family: 'Comic Neue', cursive; color: #fff; min-height: 100vh; }
-    a { color: var(--gold); text-decoration: none; }
+    [data-theme="dark"] {
+      --bg: #0f0d1a;
+      --card: #1a1726;
+      --card-alt: #231f33;
+      --text: #e8e4f0;
+      --text-soft: #9690a8;
+      --text-desc: #b0aac0;
+      --border: #2d2840;
+      --nav-bg: rgba(15,13,26,.92);
+      --step-bg: #1a1726;
+      --step-num-bg: #2d2840;
+      --step-num-color: #6b6580;
+      --input-bg: #1a1726;
+      --chip-bg: #1a1726;
+      --bubble-bg: #231f33;
+      --bubble-thought-bg: #2a1f2e;
+      --bubble-shout-bg: #2a2518;
+      --shadow: 0 4px 24px rgba(0,0,0,.3);
+      --shadow-lg: 0 8px 40px rgba(0,0,0,.4);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f0d1a;
+        --card: #1a1726;
+        --card-alt: #231f33;
+        --text: #e8e4f0;
+        --text-soft: #9690a8;
+        --text-desc: #b0aac0;
+        --border: #2d2840;
+        --nav-bg: rgba(15,13,26,.92);
+        --step-bg: #1a1726;
+        --step-num-bg: #2d2840;
+        --step-num-color: #6b6580;
+        --input-bg: #1a1726;
+        --chip-bg: #1a1726;
+        --bubble-bg: #231f33;
+        --bubble-thought-bg: #2a1f2e;
+        --bubble-shout-bg: #2a2518;
+        --shadow: 0 4px 24px rgba(0,0,0,.3);
+        --shadow-lg: 0 8px 40px rgba(0,0,0,.4);
+      }
+    }
+    body {
+      background: var(--bg);
+      font-family: 'Nunito', sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      transition: background .3s, color .3s;
+    }
+    a { color: var(--purple); text-decoration: none; }
 
-    /* Nav */
     nav {
       display: flex; align-items: center; gap: 12px;
-      padding: 14px 28px;
-      border-bottom: 3px solid #222;
-      background: #0d0d1a;
+      padding: 16px 28px;
+      background: var(--nav-bg);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(12px);
     }
     nav .logo {
-      font-family: 'Bangers', cursive;
-      font-size: 1.5rem; letter-spacing: 3px; color: var(--gold);
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: 1.4rem;
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      flex: 1;
     }
-    nav .logo span { color: var(--red); }
+    .theme-toggle {
+      background: var(--card-alt);
+      border: 2px solid var(--border);
+      border-radius: 50px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 1.1rem;
+      line-height: 1;
+      transition: background .2s, border-color .2s;
+    }
+    .theme-toggle:hover { border-color: var(--purple-light); }
 
-    /* Steps indicator */
     .steps {
-      display: flex; gap: 0; align-items: center;
-      padding: 0 28px; background: #0d0d1a;
-      border-bottom: 3px solid #222;
-      font-family: 'Bangers', cursive;
-      font-size: .85rem; letter-spacing: 2px;
+      display: flex; gap: 0; align-items: center; justify-content: center;
+      padding: 12px 28px;
+      background: var(--step-bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'Fredoka', sans-serif;
+      font-size: .85rem; font-weight: 500;
       overflow-x: auto;
     }
     .step-item {
       display: flex; align-items: center; gap: 8px;
-      padding: 10px 16px;
-      color: #444;
-      border-bottom: 3px solid transparent;
-      margin-bottom: -3px;
+      padding: 8px 18px;
+      color: var(--step-num-color);
       white-space: nowrap;
+      transition: color .2s;
     }
-    .step-item.active  { color: var(--gold); border-bottom-color: var(--gold); }
-    .step-item.done    { color: #22c55e; }
+    .step-item.active { color: var(--purple); }
+    .step-item.done   { color: var(--mint); }
     .step-num {
-      width: 22px; height: 22px;
+      width: 26px; height: 26px;
       border-radius: 50%;
-      background: #333; color: #888;
+      background: var(--step-num-bg); color: var(--step-num-color);
       display: flex; align-items: center; justify-content: center;
-      font-size: .75rem;
+      font-size: .78rem; font-weight: 700;
+      transition: all .2s;
     }
-    .step-item.active .step-num  { background: var(--gold); color: #000; }
-    .step-item.done   .step-num  { background: #22c55e; color: #000; }
-    .step-arrow { color: #333; padding: 0 4px; }
+    .step-item.active .step-num { background: var(--purple); color: #fff; }
+    .step-item.done   .step-num { background: var(--mint); color: #fff; }
+    .step-arrow { color: #ddd; padding: 0 4px; font-size: .8rem; }
 
-    /* Page body */
     .page { max-width: 960px; margin: 0 auto; padding: 48px 24px 80px; }
 
-    /* Heading */
     .page-title {
-      font-family: 'Bangers', cursive;
-      font-size: clamp(2rem, 6vw, 3.5rem);
-      color: var(--gold); letter-spacing: 3px;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: clamp(2rem, 5vw, 3rem);
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
       margin-bottom: 8px;
     }
-    .page-sub { color: #888; font-size: .95rem; margin-bottom: 40px; }
+    .page-sub { color: var(--text-soft); font-size: 1rem; margin-bottom: 40px; line-height: 1.6; }
 
-    /* Buttons */
     .btn {
       display: inline-flex; align-items: center; gap: 8px;
-      font-family: 'Bangers', cursive;
-      font-size: 1.2rem; letter-spacing: 2px;
-      padding: 12px 28px;
-      border: 3px solid var(--ink);
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: 1.05rem;
+      padding: 14px 28px;
+      border: none;
+      border-radius: 50px;
       cursor: pointer;
-      transition: transform .1s, box-shadow .1s;
+      transition: transform .15s, box-shadow .15s;
       text-decoration: none;
     }
-    .btn:hover   { transform: translate(-2px,-2px); box-shadow: 4px 4px 0 rgba(0,0,0,.5); }
-    .btn:active  { transform: translate(1px,1px);  box-shadow: 1px 1px 0 rgba(0,0,0,.5); }
-    .btn-primary { background: var(--red); color: #fff; box-shadow: 3px 3px 0 #000; }
-    .btn-ghost   { background: transparent; color: #aaa; border-color: #444; }
-    .btn-ghost:hover { color: #fff; border-color: #888; box-shadow: 4px 4px 0 rgba(255,255,255,.1); }
-    .btn-green   { background: #16a34a; color: #fff; box-shadow: 3px 3px 0 #000; }
+    .btn:hover  { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+    .btn:active { transform: translateY(0); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(124,58,237,.3);
+    }
+    .btn-ghost { background: #f3f0ff; color: var(--purple); }
+    .btn-ghost:hover { background: #ede9fe; }
+    .btn-green {
+      background: linear-gradient(135deg, var(--mint), #2dd4bf);
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(52,211,153,.3);
+    }
 
-    /* Input */
     .input-wrap { position: relative; margin-bottom: 20px; }
     textarea, input[type=text] {
       width: 100%;
-      background: #1e1e30;
-      border: 3px solid #333;
-      color: #fff;
-      font-family: 'Comic Neue', cursive;
-      font-size: 1.1rem;
-      padding: 16px;
+      background: var(--input-bg);
+      border: 2px solid var(--border);
+      color: var(--text);
+      font-family: 'Nunito', sans-serif;
+      font-size: 1.05rem;
+      padding: 16px 20px;
+      border-radius: var(--radius);
       outline: none;
-      transition: border-color .2s;
+      transition: border-color .2s, box-shadow .2s;
     }
-    textarea { height: 110px; resize: vertical; }
-    textarea:focus, input:focus { border-color: var(--gold); }
+    textarea { height: 120px; resize: vertical; }
+    textarea:focus, input:focus {
+      border-color: var(--purple-light);
+      box-shadow: 0 0 0 4px rgba(124,58,237,.1);
+    }
 
-    /* Chips */
     .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
     .chip {
-      background: #1e1e30; border: 2px solid #333;
-      color: #aaa; font-size: .82rem;
-      padding: 6px 14px; cursor: pointer;
+      background: var(--chip-bg); border: 2px solid var(--border);
+      color: var(--text-soft); font-size: .85rem;
+      padding: 8px 16px; border-radius: 50px; cursor: pointer;
       transition: all .15s;
     }
-    .chip:hover { border-color: var(--gold); color: var(--gold); background: #2a2a1a; }
+    .chip:hover { border-color: var(--purple); color: var(--purple); background: var(--card-alt); }
 
-    /* Spinner */
     .spinner {
       display: inline-block;
-      width: 18px; height: 18px;
-      border: 3px solid #333;
-      border-top-color: var(--gold);
+      width: 20px; height: 20px;
+      border: 3px solid var(--border);
+      border-top-color: var(--purple);
       border-radius: 50%;
       animation: spin .7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.6; } }
 
-    /* Progress list */
     .progress-list { display: flex; flex-direction: column; gap: 12px; max-width: 500px; }
     .prog-item {
       display: flex; align-items: center; gap: 14px;
-      background: var(--card); border: 2px solid #2a2a3e;
-      padding: 14px 18px;
-      transition: border-color .3s, background .3s;
+      background: var(--card); border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      transition: border-color .3s, background .3s, box-shadow .3s;
+      animation: fadeUp .4s ease both;
     }
-    .prog-item.active { border-color: var(--gold); background: #2a2a18; }
-    .prog-item.done   { border-color: #22c55e;     background: #182a18; }
-    .prog-item.error  { border-color: var(--red);  background: #2a1818; }
-    .prog-icon { font-size: 1.4rem; width: 28px; text-align: center; flex-shrink: 0; }
+    .prog-item.active { border-color: var(--purple-light); background: var(--card-alt); box-shadow: 0 0 0 4px rgba(124,58,237,.06); }
+    .prog-item.done   { border-color: var(--mint); background: var(--card); }
+    .prog-item.error  { border-color: #f87171; background: var(--card); }
+    .prog-icon { font-size: 1.5rem; width: 32px; text-align: center; flex-shrink: 0; }
     .prog-text { flex: 1; }
-    .prog-label { font-weight: 700; font-size: .9rem; }
-    .prog-sub   { font-size: .75rem; color: #666; margin-top: 2px; }
-    .prog-item.active .prog-sub { color: #aaa; }
-    .prog-item.done   .prog-sub { color: #4ade80; }
+    .prog-label { font-weight: 700; font-size: .95rem; }
+    .prog-sub   { font-size: .8rem; color: var(--text-soft); margin-top: 2px; }
+    .prog-item.active .prog-sub { color: var(--purple); }
+    .prog-item.done   .prog-sub { color: var(--mint); }
     .prog-status { flex-shrink: 0; }
 
-    /* Character card grid */
     .char-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 16px;
       margin: 28px 0;
     }
     .char-card {
       background: var(--card);
-      border: 3px solid #2a2a3e;
-      padding: 18px;
-      transition: border-color .2s, transform .2s;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      transition: border-color .2s, transform .2s, box-shadow .2s;
     }
-    .char-card:hover { border-color: var(--gold); transform: translateY(-3px); }
+    .char-card:hover { border-color: var(--purple-light); transform: translateY(-4px); box-shadow: var(--shadow); }
     .char-role {
       font-size: .7rem; text-transform: uppercase;
-      letter-spacing: 2px; color: var(--red);
+      letter-spacing: 2px; color: var(--pink);
       margin-bottom: 4px; font-weight: 700;
     }
     .char-name {
-      font-family: 'Bangers', cursive;
-      font-size: 1.6rem; letter-spacing: 1px;
-      color: var(--gold); margin-bottom: 8px;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: 1.4rem;
+      color: var(--purple); margin-bottom: 8px;
     }
     .char-personality {
-      font-size: .75rem; color: #888;
+      font-size: .8rem; color: var(--text-soft);
       margin-bottom: 8px; font-style: italic;
     }
-    .char-desc { font-size: .8rem; color: #bbb; line-height: 1.5; }
+    .char-desc { font-size: .85rem; color: var(--text-desc); line-height: 1.6; }
 
-    /* Reference image */
     .ref-image-wrap {
-      border: 4px solid #2a2a3e;
+      border: 2px solid var(--border);
+      border-radius: var(--radius-lg);
       margin-bottom: 28px;
       position: relative;
       overflow: hidden;
+      box-shadow: var(--shadow);
     }
     .ref-image-wrap img { width: 100%; display: block; }
     .ref-image-label {
-      position: absolute; top: 0; left: 0;
-      background: var(--red); color: #fff;
-      font-family: 'Bangers', cursive;
-      font-size: .85rem; letter-spacing: 2px;
-      padding: 4px 12px;
+      position: absolute; top: 12px; left: 12px;
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      color: #fff;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: .8rem; letter-spacing: 1px;
+      padding: 6px 14px;
+      border-radius: 50px;
     }
 
-    /* Approval action bar */
     .action-bar {
       display: flex; gap: 16px; align-items: center;
       flex-wrap: wrap;
       padding: 24px;
       background: var(--card);
-      border: 3px solid #2a2a3e;
+      border: 2px solid var(--border);
+      border-radius: var(--radius-lg);
       margin-top: 32px;
     }
-    .action-bar p { color: #aaa; font-size: .9rem; flex: 1; min-width: 200px; }
+    .action-bar p { color: var(--text-soft); font-size: .95rem; flex: 1; min-width: 200px; }
 
-    /* Comic grid */
     .comic-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       gap: 20px;
     }
-    .comic-panel { background: #fff; border: 3px solid var(--ink); color: var(--ink); overflow: hidden; }
+    .comic-panel {
+      background: var(--card); border: 2px solid var(--border);
+      border-radius: var(--radius); color: var(--text);
+      overflow: hidden; box-shadow: var(--shadow);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .comic-panel:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
     .comic-panel:nth-child(4) { grid-column: 1 / -1; }
-    .panel-header { background: var(--red); color: #fff; padding: 4px 12px; border-bottom: 3px solid var(--ink); }
-    .panel-num { font-family: 'Bangers', cursive; font-size: .8rem; letter-spacing: 3px; }
-    .panel-img img { width: 100%; display: block; border-bottom: 3px solid var(--ink); }
-    .panel-body { padding: 12px 14px; background: #fffdf0; }
+    .panel-header {
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      color: #fff; padding: 6px 16px;
+    }
+    .panel-num { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: .85rem; letter-spacing: 2px; }
+    .panel-img img { width: 100%; display: block; }
+    .panel-body { padding: 14px 18px; }
     .bubble {
       display: inline-block;
-      background: #fff; border: 3px solid var(--ink);
-      border-radius: 16px; padding: 6px 12px;
+      background: var(--bubble-bg); border: 2px solid var(--purple-light);
+      border-radius: 20px; padding: 8px 14px;
       font-weight: 700; font-size: .85rem;
       margin-bottom: 6px; max-width: 100%;
+      color: var(--text);
     }
-    .bubble--shout   { background: #fff7a0; border-color: #e6a400; }
-    .bubble--thought { border-radius: 40px; font-style: italic; }
-    .caption { font-style: italic; font-size: .82rem; color: #555; line-height: 1.5; margin-top: 4px; }
+    .bubble--shout   { background: var(--bubble-shout-bg); border-color: var(--yellow); }
+    .bubble--thought { border-radius: 50px; font-style: italic; background: var(--bubble-thought-bg); border-color: var(--pink); }
+    .caption { font-style: italic; font-size: .85rem; color: var(--text-soft); line-height: 1.6; margin-top: 4px; }
 
     @media (max-width: 600px) {
       .comic-grid { grid-template-columns: 1fr; }
       .comic-panel:nth-child(4) { grid-column: 1; }
+      .page { padding: 32px 16px 60px; }
     }
   </style>
   ${extraHead}
 </head>
 <body>
   <nav>
-    <a href="/" class="logo">COMIC<span>AI</span></a>
+    <a href="/" class="logo">Cute Comic Factory</a>
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme" id="themeBtn"></button>
   </nav>
   ${body}
+  <script>
+    (function(){
+      const stored = localStorage.getItem('theme');
+      if (stored) document.documentElement.setAttribute('data-theme', stored);
+      updateIcon();
+    })();
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme');
+      const isDark = current === 'dark' || (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const next = isDark ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      updateIcon();
+    }
+    function updateIcon() {
+      const current = document.documentElement.getAttribute('data-theme');
+      const isDark = current === 'dark' || (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.getElementById('themeBtn').textContent = isDark ? '\\u2600\\uFE0F' : '\\uD83C\\uDF19';
+    }
+  </script>
 </body>
 </html>`;
 }
@@ -287,13 +435,13 @@ function stepsBar(active) {
     { n: 1, label: 'Your Idea' },
     { n: 2, label: 'Meet the Cast' },
     { n: 3, label: 'Drawing Panels' },
-    { n: 4, label: 'Your Comic' },
+    { n: 4, label: 'Your Comic!' },
   ];
   const items = steps.map((s) => {
     const cls = s.n === active ? 'active' : s.n < active ? 'done' : '';
-    const icon = s.n < active ? '✓' : s.n;
+    const icon = s.n < active ? '&#10003;' : s.n;
     return `<div class="step-item ${cls}"><div class="step-num">${icon}</div>${s.label}</div>
-    ${s.n < steps.length ? '<span class="step-arrow">›</span>' : ''}`;
+    ${s.n < steps.length ? '<span class="step-arrow">&#8250;</span>' : ''}`;
   }).join('');
   return `<div class="steps">${items}</div>`;
 }
@@ -312,61 +460,99 @@ app.get('/', (req, res) => {
       </div>
     </label>`).join('');
 
+  const recentComics = loadIndex();
+  const galleryHtml = recentComics.length ? `
+    <div class="page" style="max-width:780px;padding-top:0">
+      <div style="border-top:1px solid var(--border);padding-top:40px">
+        <h2 style="font-family:'Fredoka',sans-serif;font-weight:700;font-size:1.4rem;color:var(--purple);margin-bottom:6px">Recent Comics</h2>
+        <p style="color:var(--text-soft);font-size:.9rem;margin-bottom:20px">Check out what others have created!</p>
+        <div class="gallery-grid">
+          ${recentComics.map(c => `
+            <a href="/comic/${escHtml(c.id)}" class="gallery-card">
+              <div class="gallery-genre">${escHtml(c.genre)}</div>
+              <div class="gallery-title">${escHtml(c.title)}</div>
+              <div class="gallery-meta">${escHtml(c.style)}</div>
+            </a>`).join('')}
+        </div>
+      </div>
+    </div>` : '';
+
   res.send(shell('Your Idea', `
     ${stepsBar(1)}
     <div class="page" style="max-width:780px">
-      <h1 class="page-title">WHAT'S YOUR STORY?</h1>
-      <p class="page-sub">Pick a style, write your idea — we'll build the cast, get your approval, then draw your comic.</p>
+      <h1 class="page-title">What's your story about?</h1>
+      <p class="page-sub">Pick an art style, describe your idea, and we'll create an awesome comic book just for you!</p>
       <form action="/start" method="POST">
 
         <div style="margin-bottom:28px">
-          <div style="font-family:'Bangers',cursive;letter-spacing:3px;font-size:.9rem;color:#aaa;margin-bottom:14px">CHOOSE YOUR ART STYLE</div>
+          <div style="font-family:'Fredoka',sans-serif;font-weight:600;font-size:.9rem;color:var(--text-soft);margin-bottom:14px">Choose your art style</div>
           <div class="style-grid">${styleCards}</div>
         </div>
 
-        <div style="font-family:'Bangers',cursive;letter-spacing:3px;font-size:.9rem;color:#aaa;margin-bottom:10px">YOUR STORY IDEA</div>
+        <div style="font-family:'Fredoka',sans-serif;font-weight:600;font-size:.9rem;color:var(--text-soft);margin-bottom:10px">Your story idea</div>
         <div class="input-wrap">
-          <textarea name="idea" id="idea" placeholder="e.g. A robot chef discovers their recipes grant superpowers to whoever eats them..." required></textarea>
+          <textarea name="idea" id="idea" placeholder="e.g. A robot chef discovers their recipes give superpowers to whoever eats them..." required></textarea>
         </div>
         <div class="chips">
           <span class="chip" onclick="setIdea(this)">Space explorer finds an ancient alien city on Mars</span>
           <span class="chip" onclick="setIdea(this)">Street artist whose graffiti comes alive at night</span>
-          <span class="chip" onclick="setIdea(this)">A detective who talks to ghosts solves their own murder</span>
+          <span class="chip" onclick="setIdea(this)">A detective who talks to ghosts solves their own mystery</span>
           <span class="chip" onclick="setIdea(this)">Kids discover their school is built on a dragon's nest</span>
         </div>
-        <button type="submit" class="btn btn-primary">BUILD MY CHARACTERS →</button>
+        <button type="submit" class="btn btn-primary">Create My Characters</button>
       </form>
     </div>
+    ${galleryHtml}
     <script>
       function setIdea(el) { document.getElementById('idea').value = el.innerText; }
     </script>
   `, `<style>
     .style-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
       margin-bottom: 4px;
     }
+    .style-card { flex: 0 0 auto; }
     .style-card input[type=radio] { display: none; }
     .style-card-inner {
       background: var(--card);
-      border: 3px solid #2a2a3e;
-      padding: 16px 14px;
+      border: 2px solid var(--border);
+      border-radius: 50px;
+      padding: 8px 16px;
       cursor: pointer;
-      transition: border-color .15s, background .15s, transform .15s;
-      text-align: center;
-      height: 100%;
+      transition: border-color .15s, background .15s, box-shadow .15s;
+      display: flex; align-items: center; gap: 8px;
+      white-space: nowrap;
     }
     .style-card input:checked + .style-card-inner {
-      border-color: var(--gold);
-      background: #2a2a18;
-      transform: translateY(-2px);
+      border-color: var(--purple);
+      background: var(--card-alt);
+      box-shadow: var(--shadow);
     }
-    .style-card-inner:hover { border-color: #666; }
-    .style-emoji { font-size: 2rem; margin-bottom: 6px; }
-    .style-label { font-family: 'Bangers', cursive; font-size: 1.1rem; letter-spacing: 2px; color: var(--gold); margin-bottom: 4px; }
-    .style-desc  { font-size: .72rem; color: #888; line-height: 1.4; }
-    @media (max-width: 540px) { .style-grid { grid-template-columns: repeat(2, 1fr); } }
+    .style-card-inner:hover { border-color: var(--purple-light); }
+    .style-emoji { font-size: 1.2rem; }
+    .style-label { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: .85rem; color: var(--purple); }
+    .style-desc  { display: none; }
+
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .gallery-card {
+      display: block;
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      text-decoration: none;
+      transition: border-color .2s, transform .2s, box-shadow .2s;
+    }
+    .gallery-card:hover { border-color: var(--purple-light); transform: translateY(-3px); box-shadow: var(--shadow); }
+    .gallery-genre { font-size: .7rem; text-transform: uppercase; letter-spacing: 2px; color: var(--pink); font-weight: 700; margin-bottom: 4px; }
+    .gallery-title { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 1.05rem; color: var(--purple); margin-bottom: 6px; line-height: 1.3; }
+    .gallery-meta { font-size: .75rem; color: var(--text-soft); }
   </style>`));
 });
 
@@ -390,36 +576,32 @@ app.get('/cast/:id', (req, res) => {
   if (!session) return res.redirect('/');
   const { id } = req.params;
 
-  // Already approved / done? Skip forward
   if (session.status === 'generating_comic' || session.status === 'done') {
     return res.redirect(`/making/${id}`);
   }
-
-  // Characters ready for approval
   if (session.status === 'cast_ready') {
     return res.redirect(`/approve/${id}`);
   }
 
-  // Show loading page; SSE will redirect when ready
   res.send(shell('Building Your Cast', `
     ${stepsBar(2)}
     <div class="page" style="max-width:540px">
-      <h1 class="page-title">BUILDING YOUR CAST</h1>
+      <h1 class="page-title">Creating your characters...</h1>
       <p class="page-sub" style="margin-bottom:32px">"${escHtml(session.idea)}"</p>
       <div class="progress-list" id="plist">
         <div class="prog-item" id="p1">
-          <span class="prog-icon">💡</span>
+          <span class="prog-icon">&#9997;&#65039;</span>
           <div class="prog-text">
             <div class="prog-label">Designing Characters</div>
-            <div class="prog-sub" id="p1s">Creating unique cast for your story…</div>
+            <div class="prog-sub" id="p1s">Dreaming up a unique cast for your story...</div>
           </div>
           <div class="prog-status" id="p1i"></div>
         </div>
         <div class="prog-item" id="p2">
-          <span class="prog-icon">🎨</span>
+          <span class="prog-icon">&#127912;</span>
           <div class="prog-text">
             <div class="prog-label">Drawing Reference Sheet</div>
-            <div class="prog-sub" id="p2s">Google Imagen renders your full cast</div>
+            <div class="prog-sub" id="p2s">Bringing your characters to life...</div>
           </div>
           <div class="prog-status" id="p2i"></div>
         </div>
@@ -437,7 +619,7 @@ app.get('/cast/:id', (req, res) => {
       function done(n, note) {
         const el = document.getElementById('p'+n);
         el.classList.remove('active'); el.classList.add('done');
-        document.getElementById('p'+n+'i').innerHTML = '<span style="color:#22c55e;font-size:1.2rem">✓</span>';
+        document.getElementById('p'+n+'i').innerHTML = '<span style="color:var(--mint);font-size:1.2rem">&#10003;</span>';
         if (note) document.getElementById('p'+n+'s').textContent = note;
       }
 
@@ -447,7 +629,7 @@ app.get('/cast/:id', (req, res) => {
       es.addEventListener('error_event', e => {
         const { msg } = JSON.parse(e.data);
         document.getElementById('plist').insertAdjacentHTML('beforeend',
-          '<div style="color:#e63946;margin-top:16px;font-weight:700">Error: ' + msg + '</div>');
+          '<div style="color:#ef4444;margin-top:16px;font-weight:700;border-radius:12px;background:#fef2f2;padding:16px">Oops! ' + msg + '</div>');
         es.close();
       });
     </script>
@@ -470,19 +652,17 @@ app.get('/cast-stream/:id', async (req, res) => {
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   try {
-    // Step 1: Characters + premise (one call, shared narrative anchor)
     sse('step', { step: 1 });
     const { premise, characters } = await generateCharacters(null, session.idea, session.style);
     session.premise = premise;
     session.characters = characters;
-    sse('stepdone', { step: 1, note: `${characters.length} characters · premise locked` });
+    sse('stepdone', { step: 1, note: `${characters.length} characters ready!` });
 
-    // Step 2: Reference sheet
     sse('step', { step: 2 });
     const refImageUrl = await buildRefSheet(characters, session.style);
     session.refImageUrl = refImageUrl;
     session.status = 'cast_ready';
-    sse('stepdone', { step: 2, note: 'Reference sheet drawn' });
+    sse('stepdone', { step: 2, note: 'Reference sheet complete!' });
 
     sse('redirect', { url: `/approve/${id}` });
   } catch (err) {
@@ -506,46 +686,45 @@ app.get('/approve/:id', (req, res) => {
       <div class="char-role">${escHtml(c.role)}</div>
       <div class="char-name">${escHtml(c.name)}</div>
       <div class="char-personality">${escHtml(c.personality)}</div>
-      <div style="font-size:.72rem;color:#e8a020;margin-bottom:6px;font-style:italic">${escHtml(c.storyRole || '')}</div>
+      <div style="font-size:.78rem;color:var(--orange);margin-bottom:6px;font-style:italic">${escHtml(c.storyRole || '')}</div>
       <div class="char-desc">${escHtml(c.description)}</div>
     </div>`).join('');
 
   res.send(shell('Meet Your Cast', `
     ${stepsBar(2)}
     <div class="page">
-      <h1 class="page-title">MEET YOUR CAST</h1>
+      <h1 class="page-title">Meet your characters!</h1>
 
-      <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:24px;flex-wrap:wrap">
-        <div style="background:#1e1e30;border-left:4px solid var(--gold);padding:16px 20px;flex:1;min-width:260px">
-          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:3px;color:var(--gold);margin-bottom:6px;font-family:'Bangers',cursive">Story Premise</div>
-          <p style="color:#ddd;font-size:.95rem;line-height:1.6">${escHtml(session.premise || '')}</p>
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:24px;flex-wrap:wrap">
+        <div style="background:var(--card);border:2px solid var(--border);border-radius:var(--radius);border-left:4px solid var(--purple);padding:18px 22px;flex:1;min-width:260px">
+          <div style="font-size:.75rem;text-transform:uppercase;letter-spacing:2px;color:var(--purple);margin-bottom:6px;font-family:'Fredoka',sans-serif;font-weight:600">Story Premise</div>
+          <p style="color:var(--text);font-size:.95rem;line-height:1.6">${escHtml(session.premise || '')}</p>
         </div>
-        <div style="background:#1e1e30;border:3px solid #2a2a3e;padding:16px 20px;text-align:center;min-width:120px">
-          <div style="font-size:2rem">${escHtml(session.style?.emoji || '🎬')}</div>
-          <div style="font-family:'Bangers',cursive;font-size:1rem;letter-spacing:2px;color:var(--gold);margin-top:4px">${escHtml(session.style?.label || 'Pixar 3D')}</div>
-          <div style="font-size:.7rem;color:#666;margin-top:4px">art style</div>
+        <div style="background:var(--card);border:2px solid var(--border);border-radius:var(--radius);padding:18px 22px;text-align:center;min-width:120px">
+          <div style="font-size:2.2rem">${escHtml(session.style?.emoji || '&#127916;')}</div>
+          <div style="font-family:'Fredoka',sans-serif;font-weight:600;font-size:1rem;color:var(--purple);margin-top:4px">${escHtml(session.style?.label || 'Pixar 3D')}</div>
+          <div style="font-size:.75rem;color:var(--text-soft);margin-top:4px">art style</div>
         </div>
       </div>
 
       <div class="ref-image-wrap">
-        <span class="ref-image-label">CHARACTER REFERENCE SHEET</span>
+        <span class="ref-image-label">Character Reference Sheet</span>
         <img src="${escHtml(session.refImageUrl)}" alt="Character reference sheet" />
       </div>
 
       <div class="char-grid">${charCards}</div>
 
       <div class="action-bar">
-        <p>These characters are built for this story. Approve to generate all 7 panels.</p>
-        <a href="/start-over/${id}" class="btn btn-ghost">↺ New Characters</a>
+        <p>Happy with your characters? Let's make your comic!</p>
+        <a href="/start-over/${id}" class="btn btn-ghost">Try New Characters</a>
         <form action="/generate/${id}" method="POST" style="margin:0">
-          <button type="submit" class="btn btn-green">GENERATE MY COMIC →</button>
+          <button type="submit" class="btn btn-green">Make My Comic!</button>
         </form>
       </div>
     </div>
   `));
 });
 
-// Regenerate — keep idea, redo characters
 app.get('/start-over/:id', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.redirect('/');
@@ -576,11 +755,11 @@ app.get('/making/:id', (req, res) => {
   if (session.status === 'done' || loadComic(id)) return res.redirect(`/comic/${id}`);
 
   const panelItems = Array.from({ length: 7 }, (_, i) => `
-    <div class="prog-item" id="pp${i+1}">
-      <span class="prog-icon">🖼</span>
+    <div class="prog-item" id="pp${i+1}" style="animation-delay:${(i+1)*0.05}s">
+      <span class="prog-icon">&#128444;&#65039;</span>
       <div class="prog-text">
         <div class="prog-label">Panel ${i+1}</div>
-        <div class="prog-sub" id="pp${i+1}s">Waiting…</div>
+        <div class="prog-sub" id="pp${i+1}s">Waiting...</div>
       </div>
       <div class="prog-status" id="pp${i+1}i"></div>
     </div>`).join('');
@@ -588,15 +767,15 @@ app.get('/making/:id', (req, res) => {
   res.send(shell('Drawing Your Comic', `
     ${stepsBar(3)}
     <div class="page" style="max-width:580px">
-      <h1 class="page-title">DRAWING YOUR COMIC</h1>
+      <h1 class="page-title">Drawing your comic!</h1>
       <p class="page-sub" style="margin-bottom:32px">"${escHtml(session.idea)}"</p>
 
       <div class="progress-list" id="plist">
         <div class="prog-item" id="ps">
-          <span class="prog-icon">📖</span>
+          <span class="prog-icon">&#128214;</span>
           <div class="prog-text">
             <div class="prog-label">Writing the Story</div>
-            <div class="prog-sub" id="pss">Scripting 7 panels with dialogue…</div>
+            <div class="prog-sub" id="pss">Scripting 7 panels with dialogue...</div>
           </div>
           <div class="prog-status" id="psi"></div>
         </div>
@@ -613,7 +792,7 @@ app.get('/making/:id', (req, res) => {
       }
       function done(el, note) {
         el.classList.remove('active'); el.classList.add('done');
-        el.querySelector('.prog-status').innerHTML = '<span style="color:#22c55e;font-size:1.2rem">✓</span>';
+        el.querySelector('.prog-status').innerHTML = '<span style="color:var(--mint);font-size:1.2rem">&#10003;</span>';
         if (note) el.querySelector('.prog-sub').textContent = note;
       }
       function setNote(el, note) { el.querySelector('.prog-sub').textContent = note; }
@@ -623,21 +802,20 @@ app.get('/making/:id', (req, res) => {
       es.addEventListener('panel_start',  e  => {
         const n = JSON.parse(e.data).panel;
         activate(document.getElementById('pp'+n));
-        setNote(document.getElementById('pp'+n), 'Google GenAI drawing with char reference…');
+        setNote(document.getElementById('pp'+n), 'Drawing with character reference...');
       });
       es.addEventListener('panel_done',   e  => {
         const { panel, imgUrl } = JSON.parse(e.data);
         const el = document.getElementById('pp'+panel);
-        done(el, 'Done');
-        // Show thumbnail inline
+        done(el, 'Done!');
         el.insertAdjacentHTML('afterend',
-          '<img src="'+imgUrl+'" style="width:100%;border:2px solid #22c55e;margin-bottom:4px" loading="lazy"/>');
+          '<img src="'+imgUrl+'" style="width:100%;border-radius:12px;margin-bottom:4px;box-shadow:var(--shadow)" loading="lazy"/>');
       });
       es.addEventListener('redirect',     e  => { es.close(); window.location.href = JSON.parse(e.data).url; });
       es.addEventListener('error_event',  e  => {
         const { msg } = JSON.parse(e.data);
         document.getElementById('plist').insertAdjacentHTML('beforeend',
-          '<div style="color:#e63946;margin-top:16px;font-weight:700">Error: '+msg+'</div>');
+          '<div style="color:#ef4444;margin-top:16px;font-weight:700;border-radius:12px;background:#fef2f2;padding:16px">Oops! '+msg+'</div>');
         es.close();
       });
     </script>
@@ -662,13 +840,11 @@ app.get('/make-stream/:id', async (req, res) => {
   try {
     const { characters, refImageUrl, premise } = session;
 
-    // Story — uses the SAME premise that was used to design the characters
     sse('story_start', {});
     const story = await generateStory(null, premise, characters);
     session.story = story;
     sse('story_done', { title: story.title });
 
-    // Panels — all 7 fire in parallel
     story.story.forEach((scene) => sse('panel_start', { panel: scene.panel }));
     const panelResults = await Promise.all(
       story.story.map(async (scene) => {
@@ -677,13 +853,11 @@ app.get('/make-stream/:id', async (req, res) => {
         return { ...scene, localPath: imgUrl };
       })
     );
-    // Restore panel order (Promise.all preserves order, but be explicit)
     const panels = panelResults.sort((a, b) => a.panel - b.panel);
     session.panels = panels;
 
-    // Build final HTML and persist to disk (survives restarts / volume mounts)
     const html = buildComicHTML(story, characters, refImageUrl, panels);
-    saveComic(id, html);
+    saveComic(id, html, { title: story.title, genre: story.genre, style: session.style?.label || '' });
     session.status = 'done';
 
     sse('redirect', { url: `/comic/${id}` });
@@ -700,7 +874,6 @@ app.get('/make-stream/:id', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/comic/:id', (req, res) => {
   const session = sessions.get(req.params.id);
-  // Try disk first (persists across restarts), then fall back to in-progress session check
   const html = loadComic(req.params.id);
   if (!html) return res.redirect('/');
   res.setHeader('Content-Type', 'text/html');
@@ -714,7 +887,6 @@ app.get('/comic/:id', (req, res) => {
 async function generateImage(prompt, aspectRatio = '1:1', referenceImageUrl = null) {
   const contents = [];
 
-  // If we have a reference image, fetch it and include as inline data
   if (referenceImageUrl) {
     const imgRes = await fetch(referenceImageUrl);
     const imgBuf = Buffer.from(await imgRes.arrayBuffer());
@@ -736,7 +908,6 @@ async function generateImage(prompt, aspectRatio = '1:1', referenceImageUrl = nu
     })
   , 'image gen');
 
-  // Extract image from response parts
   for (const part of response.candidates?.[0]?.content?.parts || []) {
     if (part.inlineData) {
       const b64 = part.inlineData.data;
@@ -745,7 +916,6 @@ async function generateImage(prompt, aspectRatio = '1:1', referenceImageUrl = nu
     }
   }
 
-  // Fallback: try Imagen 3 directly
   const imagenResponse = await withRetry(() =>
     genai.models.generateImages({
       model: 'imagen-3.0-generate-001',
@@ -823,31 +993,278 @@ function buildComicHTML(story, characters, refImageUrl, panels) {
     </div>`;
   }).join('');
 
-  return shell(story.title, `
-    <div style="background:linear-gradient(135deg,#0d0d2b,#1a0a2e,#0d1a2b);padding:80px 24px 60px;text-align:center;border-bottom:5px solid #000">
-      <p style="font-family:'Bangers',cursive;font-size:.9rem;letter-spacing:6px;color:var(--red);margin-bottom:12px">${escHtml(story.genre)}</p>
-      <h1 style="font-family:'Bangers',cursive;font-size:clamp(3rem,10vw,7rem);color:var(--gold);text-shadow:5px 5px 0 #000,8px 0 0 var(--red);letter-spacing:4px;line-height:1">${escHtml(story.title)}</h1>
-      <p style="font-family:'Bangers',cursive;font-size:1.4rem;letter-spacing:3px;color:#fff;margin-top:16px;opacity:.85">${escHtml(story.tagline)}</p>
-      <a href="/" style="display:inline-block;margin-top:28px;font-family:'Bangers',cursive;letter-spacing:2px;font-size:1rem;color:var(--gold);border:2px solid var(--gold);padding:8px 20px">← MAKE ANOTHER</a>
-    </div>
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>${escHtml(story.title)} — Cute Comic Factory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root, [data-theme="light"] {
+      --purple: #7c3aed;
+      --purple-light: #a78bfa;
+      --pink: #ec4899;
+      --mint: #34d399;
+      --yellow: #fbbf24;
+      --orange: #fb923c;
+      --bg: #faf7ff;
+      --card: #ffffff;
+      --card-alt: #f5f3ff;
+      --text: #1e1b4b;
+      --text-soft: #6b7280;
+      --text-desc: #555;
+      --border: #e5e7eb;
+      --bubble-bg: #f5f3ff;
+      --bubble-thought-bg: #fdf2f8;
+      --bubble-shout-bg: #fef3c7;
+      --radius: 16px;
+      --radius-lg: 24px;
+      --shadow: 0 4px 24px rgba(124,58,237,.08);
+      --shadow-lg: 0 8px 40px rgba(124,58,237,.12);
+    }
+    [data-theme="dark"] {
+      --bg: #0f0d1a; --card: #1a1726; --card-alt: #231f33;
+      --text: #e8e4f0; --text-soft: #9690a8; --text-desc: #b0aac0;
+      --border: #2d2840;
+      --bubble-bg: #231f33; --bubble-thought-bg: #2a1f2e; --bubble-shout-bg: #2a2518;
+      --shadow: 0 4px 24px rgba(0,0,0,.3);
+      --shadow-lg: 0 8px 40px rgba(0,0,0,.4);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f0d1a; --card: #1a1726; --card-alt: #231f33;
+        --text: #e8e4f0; --text-soft: #9690a8; --text-desc: #b0aac0;
+        --border: #2d2840;
+        --bubble-bg: #231f33; --bubble-thought-bg: #2a1f2e; --bubble-shout-bg: #2a2518;
+        --shadow: 0 4px 24px rgba(0,0,0,.3);
+        --shadow-lg: 0 8px 40px rgba(0,0,0,.4);
+      }
+    }
+    body { background: var(--bg); font-family: 'Nunito', sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; transition: background .3s, color .3s; }
+    a { color: var(--purple); text-decoration: none; }
+    .theme-toggle-float {
+      position: fixed; top: 16px; right: 16px; z-index: 100;
+      background: var(--card); border: 2px solid var(--border);
+      border-radius: 50px; padding: 8px 14px; cursor: pointer;
+      font-size: 1.1rem; line-height: 1; box-shadow: var(--shadow);
+      transition: background .2s, border-color .2s;
+    }
+    .theme-toggle-float:hover { border-color: var(--purple-light); }
 
-    <div style="background:var(--cream);color:var(--ink);border-bottom:4px solid #000;padding:40px 24px">
-      <div style="max-width:1100px;margin:0 auto">
-        <h2 style="font-family:'Bangers',cursive;font-size:2rem;letter-spacing:4px;text-align:center;margin-bottom:24px">CAST OF CHARACTERS</h2>
-        <div style="max-width:900px;margin:0 auto 28px;border:4px solid #000;box-shadow:8px 8px 0 #000">
-          <img src="${escHtml(refImageUrl)}" style="width:100%;display:block" alt="Character reference sheet"/>
-        </div>
-        <div class="char-grid" style="max-width:900px;margin:0 auto">${charRoster}</div>
-      </div>
-    </div>
+    .hero {
+      position: relative;
+      background: linear-gradient(135deg, #7c3aed 0%, #ec4899 50%, #fb923c 100%);
+      padding: 80px 24px 60px;
+      text-align: center;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.2) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-genre {
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: .9rem;
+      letter-spacing: 4px;
+      color: rgba(255,255,255,.85);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+    .hero-title {
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: clamp(3rem, 9vw, 6rem);
+      color: #fff;
+      text-shadow: 0 4px 24px rgba(0,0,0,.15);
+      line-height: 1.1;
+    }
+    .hero-tagline {
+      font-family: 'Nunito', sans-serif;
+      font-weight: 600;
+      font-size: clamp(1rem, 2.5vw, 1.4rem);
+      color: rgba(255,255,255,.9);
+      margin-top: 18px;
+    }
+    .hero-btn {
+      display: inline-block;
+      margin-top: 28px;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: 1rem;
+      color: #fff;
+      border: 2px solid rgba(255,255,255,.4);
+      padding: 10px 24px;
+      border-radius: 50px;
+      transition: background .2s;
+    }
+    .hero-btn:hover { background: rgba(255,255,255,.15); }
 
-    <div style="padding:50px 24px 80px">
-      <div style="max-width:1200px;margin:0 auto">
-        <h2 style="font-family:'Bangers',cursive;font-size:2rem;letter-spacing:4px;color:var(--gold);text-align:center;margin-bottom:32px">THE STORY</h2>
-        <div class="comic-grid">${panelCards}</div>
-      </div>
+    .roster-section {
+      background: var(--card);
+      padding: 50px 24px;
+    }
+    .section-title {
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: 2rem;
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .ref-sheet-wrap {
+      max-width: 900px;
+      margin: 0 auto 32px;
+      border: 2px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+    }
+    .ref-sheet-wrap img { width: 100%; display: block; }
+    .char-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .char-card {
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      transition: transform .2s, box-shadow .2s;
+    }
+    .char-card:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+    .char-role {
+      font-size: .7rem; text-transform: uppercase;
+      letter-spacing: 2px; color: var(--pink);
+      font-weight: 700; margin-bottom: 4px;
+    }
+    .char-name {
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700; font-size: 1.3rem;
+      color: var(--purple); margin-bottom: 6px;
+    }
+    .char-personality {
+      font-size: .8rem; color: var(--text-soft);
+      font-style: italic; margin-bottom: 6px;
+    }
+    .char-desc { font-size: .82rem; line-height: 1.5; color: var(--text-desc); }
+
+    .comic-section { padding: 50px 24px 80px; }
+    .comic-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .comic-panel {
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .comic-panel:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+    .comic-panel:nth-child(4) { grid-column: 1 / -1; }
+    .panel-header {
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      padding: 6px 16px;
+    }
+    .panel-num {
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600; font-size: .85rem;
+      letter-spacing: 2px; color: #fff;
+    }
+    .panel-img img { width: 100%; display: block; }
+    .panel-body { padding: 14px 18px; }
+    .bubble {
+      display: inline-block;
+      background: var(--bubble-bg); border: 2px solid var(--purple-light);
+      border-radius: 20px; padding: 8px 14px;
+      font-weight: 700; font-size: .85rem;
+      margin-bottom: 6px; max-width: 100%;
+      color: var(--text);
+    }
+    .bubble--shout { background: var(--bubble-shout-bg); border-color: var(--yellow); }
+    .bubble--thought { border-radius: 50px; font-style: italic; background: var(--bubble-thought-bg); border-color: var(--pink); }
+    .bubble--whisper { opacity: .75; font-size: .82rem; border-style: dashed; }
+    .caption { font-style: italic; font-size: .85rem; color: var(--text-soft); line-height: 1.6; margin-top: 4px; }
+
+    footer {
+      text-align: center;
+      padding: 32px;
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--purple-light);
+      border-top: 1px solid var(--border);
+    }
+
+    @media (max-width: 640px) {
+      .comic-grid { grid-template-columns: 1fr; }
+      .comic-panel:nth-child(4) { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <p class="hero-genre">${escHtml(story.genre)}</p>
+    <h1 class="hero-title">${escHtml(story.title)}</h1>
+    <p class="hero-tagline">${escHtml(story.tagline)}</p>
+    <a href="/" class="hero-btn">Make Another Comic</a>
+  </header>
+
+  <section class="roster-section">
+    <h2 class="section-title">Cast of Characters</h2>
+    <div class="ref-sheet-wrap">
+      <img src="${escHtml(refImageUrl)}" alt="Character reference sheet"/>
     </div>
-  `);
+    <div class="char-grid">${charRoster}</div>
+  </section>
+
+  <section class="comic-section">
+    <h2 class="section-title" style="margin-bottom:32px">The Story</h2>
+    <div class="comic-grid">${panelCards}</div>
+  </section>
+
+  <footer>The End &mdash; Made with Cute Comic Factory</footer>
+
+  <button class="theme-toggle-float" onclick="toggleTheme()" aria-label="Toggle theme" id="themeBtn"></button>
+  <script>
+    (function(){
+      var stored = localStorage.getItem('theme');
+      if (stored) document.documentElement.setAttribute('data-theme', stored);
+      updateIcon();
+    })();
+    function toggleTheme() {
+      var current = document.documentElement.getAttribute('data-theme');
+      var isDark = current === 'dark' || (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      var next = isDark ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      updateIcon();
+    }
+    function updateIcon() {
+      var current = document.documentElement.getAttribute('data-theme');
+      var isDark = current === 'dark' || (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.getElementById('themeBtn').textContent = isDark ? '\\u2600\\uFE0F' : '\\uD83C\\uDF19';
+    }
+  </script>
+</body>
+</html>`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -855,4 +1272,4 @@ function escHtml(str = '') {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-app.listen(PORT, () => console.log(`Comic Book AI running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Cute Comic Factory running on http://localhost:${PORT}`));
